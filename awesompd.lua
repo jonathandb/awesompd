@@ -181,9 +181,7 @@ function awesompd:create()
    instance.recreate_list = true
    instance.recreate_servers = true
    instance.recreate_options = true
-   instance.recreate_jamendo_formats = true
-   instance.recreate_jamendo_order = true
-   instance.recreate_jamendo_browse = true
+   instance.recreate_mpdc = true
    instance.current_number = 0
    instance.menu_shown = false
 
@@ -392,6 +390,17 @@ end
 
 -- /// End of mpc command functions ///
 
+-- /// mpdc command function ///
+
+function awesompd:mpdc_command(command, hook)
+   local file = io.popen("mpdc-playlist add " .. command)
+   if hook then
+      hook(self,file)
+   end
+   file:close()
+end
+
+
 -- /// Menu generation functions ///
 
 function awesompd:command_show_menu()
@@ -407,23 +416,11 @@ function awesompd:command_show_menu()
          then 
             self:check_list() 
             self:check_playlists()
-            local jamendo_menu = { { "Search by", 
-                                     { { "Nothing (Top 100)", self:menu_jamendo_top() },
-                                       { "Artist", self:menu_jamendo_search_by(jamendo.SEARCH_ARTIST) },
-                                       { "Album", self:menu_jamendo_search_by(jamendo.SEARCH_ALBUM) },
-                                       { "Tag", self:menu_jamendo_search_by(jamendo.SEARCH_TAG) }}} }
-            local browse_menu = self:menu_jamendo_browse()
-            if browse_menu then 
-               table.insert(jamendo_menu, browse_menu)
-            end
-            table.insert(jamendo_menu, self:menu_jamendo_format())
-            table.insert(jamendo_menu, self:menu_jamendo_order())
-
             new_menu = { { "Playback", self:menu_playback() },
                          { "Options", self:menu_options() },
                          { "List", self:menu_list() },
                          { "Playlists", self:menu_playlists() },
-                         { "Jamendo", jamendo_menu } }
+                         { "Mpdc", self:menu_mpdc() } }
          end 
          table.insert(new_menu, { "Servers", self:menu_servers() }) 
          self.main_menu = awful.menu({ items = new_menu, theme = { width = 300 } }) 
@@ -560,6 +557,17 @@ function awesompd:menu_options()
    return self.options_menu
 end
 
+function awesompd:menu_mpdc()
+   if self.recreate_mpdc then 
+      local new_menu = { { "Add similar artists", self:menu_mpdc_artist() },
+                         { "Add similar albums", self:menu_mpdc_album() },
+                         { "Search by genre", self:menu_mpdc_genre()} }
+      self.mpdc_menu = new_menu
+      self.recreate_mpdc = false      
+   end
+   return self.mpdc_menu
+end
+
 function awesompd:menu_toggle_random()
    return function()
              self:command("random",self.update_track)
@@ -588,127 +596,24 @@ function awesompd:menu_toggle_consume()
           end
 end
 
-function awesompd:menu_jamendo_top()
-   return 
-   function ()
-      local track_table = jamendo.return_track_table()
-      if not track_table then
-         self:show_notification("Can't connect to Jamendo server", "Please check your network connection")
-      else
-         self:add_jamendo_tracks(track_table)
-         self:show_notification("Jamendo Top 100 by " ..
-                                jamendo.current_request_table.params.order.short_display,
-                                format("Added %s tracks to the playlist",
-                                       #track_table))
-      end
-   end
-end
-
-function awesompd:menu_jamendo_format()
-   if self.recreate_jamendo_formats then
-      local setformat =
-         function(format)
-            return function()
-                      jamendo.set_current_format(format)
-                      self.recreate_menu = true
-                      self.recreate_jamendo_formats = true
-                   end
-         end
-
-      local iscurr = 
-         function(f)
-            return jamendo.current_request_table.params.streamencoding.value
-               == f.value
-         end
-
-      local new_menu = {}
-      for _, format in pairs(jamendo.ALL_FORMATS) do
-         table.insert(new_menu, { format.display, setformat(format),
-                                  self:menu_item_radio(iscurr(format))})
-      end
-      self.recreate_jamendo_formats = false
-      self.jamendo_formats_menu = { 
-         "Format: " ..
-            jamendo.current_request_table.params.streamencoding.short_display,
-         new_menu }
-   end
-   return self.jamendo_formats_menu
-end
-
-function awesompd:menu_jamendo_browse()
-   if self.recreate_jamendo_browse and self.browser 
-      and self.current_track.unique_name then
-      local track = jamendo.get_track_by_link(self.current_track.unique_name)
-      local new_menu
-      if track then
-         local artist_link = 
-            "http://www.jamendo.com/artist/" .. track.artist_link_name
-         local album_link =
-            "http://www.jamendo.com/album/" .. track.album_id
-         new_menu = { { "Artist's page" , 
-                        self:command_open_in_browser(artist_link) },
-                      { "Album's page" ,
-                        self:command_open_in_browser(album_link) } }
-         self.jamendo_browse_menu = { "Browse on Jamendo", new_menu }
-      else
-         self.jamendo_browse_menu = nil
-      end
-   end
-   return self.jamendo_browse_menu
-end
-
-function awesompd:menu_jamendo_order()
-   if self.recreate_jamendo_order then
-      local setorder =
-         function(order)
-            return function()
-                      jamendo.set_current_order(order)
-                      self.recreate_menu = true
-                      self.recreate_jamendo_order = true
-                   end
-         end
-
-      local iscurr = 
-         function(o)
-            return jamendo.current_request_table.params.order.value
-               == o.value
-         end
-
-      local new_menu = {}
-      for _, order in pairs(jamendo.ALL_ORDERS) do
-         table.insert(new_menu, { order.display, setorder(order),
-                                  self:menu_item_radio(iscurr(order))})
-      end
-      self.recreate_jamendo_order = false
-      self.jamendo_order_menu = { 
-         "Order: " ..
-            jamendo.current_request_table.params.order.short_display,
-         new_menu }
-   end
-   return self.jamendo_order_menu
-end
-
-function awesompd:menu_jamendo_search_by(what)
+function awesompd:menu_mpdc_artist()
    return function()
-             local callback = 
-                function(s)
-                   local result = jamendo.search_by(what, s)
-                   if result then
-                      local track_count = #result.tracks
-                      self:add_jamendo_tracks(result.tracks)
-                      self:show_notification(format("%s \"%s\" was found",
-                                                    what.display,
-                                                    result.search_res.name),
-                                             format("Added %s tracks to the playlist",
-                                                    track_count))
-                   else
-                      self:show_notification("Search failed",
-                                             format("%s \"%s\" was not found",
-                                                    what.display, s))
-                   end
-                end
-             self:display_inputbox("Search music on Jamendo",
-                                   what.display, callback)
+             self:mpdc_command("A\\|sa1")
+             awesompd:check_notify()
+          end
+end
+
+function awesompd:menu_mpdc_album()
+   return function()
+             self:mpdc_command("B\\|sb1")
+             awesompd:check_notify()
+          end
+end
+
+function awesompd:menu_mpdc_genre()
+   return function()
+             self:display_inputbox("Search by genre", "Artist", print)
+             awesompd:check_notify()
           end
 end
 
@@ -756,14 +661,6 @@ function awesompd:change_server(server_number)
    self.recreate_playlists = true
    self.recreate_servers = true
    self:update_track()
-end
-
-function awesompd:add_jamendo_tracks(track_table)
-   for i = 1, #track_table do
-      self:command("add '" .. string.gsub(track_table[i].stream, '\\/', '/') .. "'")
-   end
-   self.recreate_menu = true
-   self.recreate_list = true
 end
 
 -- /// End of menu generation functions ///
@@ -928,19 +825,6 @@ function awesompd:update_track(file)
          local _, _, new_file, station, title, artist, album =
             string.find(track_line, "(.*)%-<>%-(.*)%-<>%-(.*)%-<>%-(.*)%-<>%-(.*)")
          local display_name, force_update = artist .. " - " .. title, false
-         -- The following code checks if the current track is an
-         -- Internet link. Internet radios change tracks, but the
-         -- current file stays the same, so we should manually compare
-         -- its title.
-         if string.match(new_file, "http://") and
-            -- The following line is awful. This needs to be replaced ASAP.
-            not string.match(new_file, "http://storage%-new%.newjamendo%.com") then
-            album = non_empty(station) or ""
-            display_name = non_empty(title) or new_file
-            if display_name ~= self.current_track.display_name then
-               force_update = true
-            end
-         end
 	 if new_file ~= self.current_track.unique_name or force_update then
             self.current_track = jamendo.get_track_by_link(new_file)
             if not self.current_track then
